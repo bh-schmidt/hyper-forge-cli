@@ -1,15 +1,14 @@
-import { Command } from "commander";
-import { AutoCompleteMatcher, PromptsHelper } from 'hyper-forge';
-import prompts, { Choice } from "prompts";
-import { Route, RouteItem } from "./types";
-import { getForgesRoutes } from "./useCases/getForgesRoutes";
-import { installFromGitPrompt } from "./useCases/install-forge-git/installFromGitPrompt";
-import { getForges, readForges } from "./useCases/readForges";
-import { uninstallForge } from "./useCases/uninstall-forge/uninstallForge";
-import { installForgeDirectoryPrompt } from "./useCases/install-forge-directory-prompt/installForgeDirectoryPrompt";
-import { getMissingForgesIds } from "./useCases/get-missing-forges-ids/getMissingForgesIds";
-import { uninstallMissingForges } from "./useCases/uninstall-missing-forges/uninstallMissingForges";
+import { Route, RouteItem } from "@/types.js";
+import { getMissingForgesIds } from "@/useCases/get-missing-forges-ids/getMissingForgesIds.js";
+import { getForgesRoutes } from "@/useCases/getForgesRoutes.js";
+import { installForgeDirectoryPrompt } from "@/useCases/install-forge-directory-prompt/installForgeDirectoryPrompt.js";
+import { installFromGitPrompt } from "@/useCases/install-forge-from-git-prompt/installFromGitPrompt.js";
+import { getForges, readForges } from "@/useCases/readForges.js";
 import chalk from "chalk";
+import { Command } from "commander";
+import { Utils } from 'hyper-forge';
+import { Internals } from "hyper-forge/internals";
+import prompts, { Choice } from "prompts";
 
 export function buildRootRoute(program: Command): Route {
     return {
@@ -37,7 +36,7 @@ export function buildRootRoute(program: Command): Route {
                         async execute() {
                             const success = await installFromGitPrompt()
                             if (!success) {
-                                await PromptsHelper.waitForKey()
+                                await Utils.Prompts.waitForKey()
                             }
                             await readForges()
                         }
@@ -48,7 +47,7 @@ export function buildRootRoute(program: Command): Route {
                         async execute() {
                             const success = await installForgeDirectoryPrompt()
                             if (!success) {
-                                await PromptsHelper.waitForKey()
+                                await Utils.Prompts.waitForKey()
                             }
                             await readForges()
                         }
@@ -72,7 +71,7 @@ export function buildRootRoute(program: Command): Route {
                             title: '* Missing Forges *',
                             description: 'Uninstall forges whose directories are missing',
                             async execute() {
-                                await uninstallMissingForges()
+                                await  Internals.ForgeHandler.uninstallMissingForges()
                             }
                         })
                     }
@@ -86,7 +85,7 @@ export function buildRootRoute(program: Command): Route {
                             id: f.id,
                             title: name,
                             async execute() {
-                                const { confirmation } = await PromptsHelper.prompt({
+                                const { confirmation } = await Utils.Prompts.prompt({
                                     name: 'confirmation',
                                     type: 'confirm',
                                     message: `Uninstall forge ${chalk.red(f.id)}?`
@@ -96,7 +95,7 @@ export function buildRootRoute(program: Command): Route {
                                     return
                                 }
 
-                                await uninstallForge(f.id)
+                                await Internals.ForgeHandler.uninstallForge(f.id)
                                 await readForges()
                             }
                         })
@@ -136,7 +135,7 @@ export async function runRoute(route: Route) {
             choices: choices,
             type: route.type,
             async suggest(input, choices) {
-                return await AutoCompleteMatcher.wildcardMatch(input, choices)
+                return await Utils.AutoComplete.wildcardMatch(input, choices)
             },
             hint: route.type == 'select' ?
                 `nav: [↑, ↓, j, k] submit: [enter] back: [ctrl+c]` :

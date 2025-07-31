@@ -1,17 +1,13 @@
 #!/usr/bin/env node
 
+import { buildRootRoute, runRoute } from "@/router.js"
+import { cleanup, waitForCleanup } from "@/useCases/cleanUpExecutions.js"
+import { getForges, readForges } from "@/useCases/readForges.js"
 import chalk from "chalk"
 import { Argument, Command, Option } from "commander"
-import { ConfigHandler, HyperForgeData } from "hyper-forge"
-import { buildRootRoute, runRoute } from "./router"
-import { cleanup } from "./useCases/cleanUpExecutions"
-import { getForgeRunner } from "./useCases/getForgeRunner"
-import { installForgeDirectory } from "./useCases/install-forge-directory/installForgeDirectory"
-import { installFromGit } from "./useCases/install-forge-git/installFromGit"
-import { getForges, readForges } from "./useCases/readForges"
-import { uninstallForge } from "./useCases/uninstall-forge/uninstallForge"
-import { uninstallMissingForges } from "./useCases/uninstall-missing-forges/uninstallMissingForges"
-
+import { ForgeError, Utils } from 'hyper-forge'
+import { Internals } from "hyper-forge/internals"
+import PackageJson from '../package.json' with { type: 'json' }
 readForges()
 cleanup()
 
@@ -37,26 +33,39 @@ const list = new Command('list')
         }
     })
 
-let commandRunning = false
 const runCommand = new Command('run')
     .description('Run a forge task')
     .argument('[forge]', 'The id of the forge')
     .argument('[task]', 'The id of the task')
     .option('--rebuild', 'Rebuilds typescript projects')
-    .option('--disable-prompts', 'Disables prompts')
-    .option('--disable-prompt-confirmation', 'Disables confirmation after prompts')
-    .option('--disable-saving', 'Disables saving config')
-    .option('-h, --help', 'display help for command')
-    .usage('<forge> <task> [options]')
-    .helpOption(false)
-    .helpCommand(false)
+    .option('--list', 'Lists all the available variables on the specified forge task.')
+    .addOption(
+        new Option('-s, --set <keyValue>', 'Sets a variable')
+            .argParser((keyValue, prev: any) => {
+                prev ??= {}
+
+                if (!keyValue.includes('=')) {
+                    throw new ForgeError('Incorrect set usage.', 'Correct usage: key=value.')
+                }
+
+                const match = keyValue.match(/([a-zA-Z0-9-_]+)=(.+)/)
+                if (!match) {
+                    throw new ForgeError('Incorrect set usage.', ' - usage: key=value.')
+                }
+
+                const key = match[1]
+                const value = match[2]
+
+                prev[key] = value
+
+                return prev
+            })
+    )
+    .usage('<forge-id> <task-id> [options]')
     .allowExcessArguments()
     .allowUnknownOption()
     .action(async (forgeId, taskId) => {
-        if (commandRunning)
-            return
-
-        commandRunning = true
+        await waitForCleanup()
 
         const opts = runCommand.opts()
         if (!taskId && opts.help) {
@@ -64,11 +73,11 @@ const runCommand = new Command('run')
         }
 
         if (!forgeId) {
-            runCommand.error(`error: missing required argument 'forge-id'`)
+            throw new ForgeError(`Missing required argument 'forge-id'.`)
         }
 
         if (!taskId) {
-            runCommand.error(`error: missing required argument 'task-id'`)
+            throw new ForgeError(`Missing required argument 'task-id'.`)
         }
 
         const forges = await getForges()
@@ -89,40 +98,67 @@ const runCommand = new Command('run')
             process.exit(1)
         }
 
-        const runner = await getForgeRunner({
+        await waitForCleanup()
+        const runner = await Internals.RunnerProvider.getForgeRunner({
             forge: forge!,
             task: task!,
-            program: runCommand,
-            rebuild: opts.rebuild
+            rebuild: opts.rebuild,
+            variables: opts.set
         })
 
-        if (opts.help) {
-            runCommand.help()
+        if (opts.list) {
+            const forge = runner.getForge()
+            const mapper = forge.variables.mapper
+
+            const entries = Object.entries(mapper.map)
+            const maxSize = entries.reduce((final, curr) => curr[0].length > final ? curr[0].length : final, 0)
+            const padding = maxSize + 4
+
+            const reserved: typeof entries = []
+            const common: typeof entries = []
+            for (const entry of entries) {
+                if (entry[1].isReserved) {
+                    reserved.push(entry)
+                } else {
+                    common.push(entry)
+                }
+            }
+
+            console.log(chalk.bold('System variables:'))
+            for (const [name, variable] of reserved) {
+                console.log(` - ${name.padEnd(padding)}${variable.description ?? ''}`)
+            }
+
+            console.log()
+            console.log(chalk.bold('Forge variables:'))
+            for (const [name, variable] of common) {
+                console.log(` - ${name.padEnd(padding)}${variable.description ?? ''}`)
+            }
+
+            return
         }
 
-        await program.exitOverride().parseAsync()
-
         console.log(chalk.bold(`Starting the ${chalk.cyan(task.name)} task from the ${chalk.cyan(forge.name)} forge\n`))
-        runner.run()
-        console.log(chalk.green.bold('\nThe execution of your task just finished. Till next time!'))
+        await runner.run()
+        console.log(chalk.green.bold('The execution of your task just finished. Till next time!'))
     })
 
 const uninstallCommand = new Command('uninstall')
     .description('Uninstalls a forge')
-    .argument('[forge]', 'The id of the forge')
+    .argument('[forge-id]', 'The id of the forge')
     .option('--missing-directories', 'Uninstall forges whose directories are missing')
     .action(async (forgeId) => {
         const opts = uninstallCommand.opts()
         if (!opts.missingDirectories && !forgeId) {
-            uninstallCommand.error(`error: either 'forge-id' or --missing-directories should be informed`)
+            throw new ForgeError(`Either 'forge-id' or --missing-directories should be informed`)
         }
 
         if (forgeId) {
-            await uninstallForge(forgeId)
+            await Internals.ForgeHandler.uninstallForge(forgeId)
         }
 
         if (opts.missingDirectories) {
-            await uninstallMissingForges()
+            await Internals.ForgeHandler.uninstallMissingForges()
         }
     })
 
@@ -148,7 +184,7 @@ installCommand.addCommand(
             },
         })
         .action(async (forgeIds, options) => {
-            await installFromGit({
+            await Internals.ForgeHandler.installGitForge({
                 forgeIds: forgeIds,
                 repository: options.repository,
                 branch: options.branch,
@@ -165,10 +201,10 @@ installCommand.addCommand(
         .option('--replace', 'Replaces the current existing forge')
         .addOption(
             new Option('--rebuild-strategy <strategy>', 'Sets the strategy to decide whether to rebuild the forge or not')
-                .choices(HyperForgeData.rebuildStrategies)
+                .choices(Utils.rebuildStrategies)
         )
         .action(async (dir, options) => {
-            await installForgeDirectory({
+            await Internals.ForgeHandler.installDirForge({
                 directory: dir,
                 replace: options.replace,
                 rebuildStrategy: options.rebuildStrategy
@@ -198,14 +234,14 @@ getConfig
     .option('--recursive', 'Also merges values with parent configs.')
     .action(async (key, options) => {
         if (!options.forge && (!options.scope || options.scope == 'task' || options.scope == 'forge')) {
-            program.error('forge id is required')
+            throw new ForgeError('Forge id is required')
         }
 
         if (!options.task && (!options.scope || options.scope == 'task')) {
-            program.error('task id is required')
+            throw new ForgeError('Task id is required')
         }
 
-        const value = await ConfigHandler.getConfig({
+        const value = await Internals.ConfigHandler.getConfig({
             directory: process.cwd(),
             key,
             scope: options.scope,
@@ -228,14 +264,14 @@ setConfig
     .option('--as-json', 'Parses the value as a json')
     .action(async (scope, key, value, opts) => {
         if (!opts.forge && (scope == 'task' || scope == 'forge')) {
-            program.error('forge id is required')
+            throw new ForgeError('Forge id is required')
         }
 
         if (!opts.task && (scope == 'task')) {
-            program.error('task id is required')
+            throw new ForgeError('Task id is required')
         }
 
-        await ConfigHandler.setConfig({
+        await Internals.ConfigHandler.setConfig({
             directory: process.cwd(),
             key: key,
             scope: scope,
@@ -255,13 +291,13 @@ deleteConfig
     .option('--task <id>', 'The id of the task')
     .action(async (scope, key, opts) => {
         if (!opts.forge && (scope == 'task' || scope == 'forge')) {
-            program.error('forge id is required')
+            throw new ForgeError('Forge id is required')
         }
 
         if (!opts.task && (scope == 'task')) {
-            program.error('task id is required')
+            throw new ForgeError('Task id is required')
         }
-        await ConfigHandler.deleteConfig({
+        await Internals.ConfigHandler.deleteConfig({
             directory: process.cwd(),
             key: key,
             scope: scope,
@@ -270,30 +306,63 @@ deleteConfig
         })
     })
 
-await program
-    .addCommand(list)
-    .addCommand(runCommand)
-    .addCommand(installCommand)
-    .addCommand(uninstallCommand)
-    .addCommand(config)
-    .helpCommand(false)
-    .configureHelp({
-        sortOptions: true,
-        sortSubcommands: true,
-        styleUsage() {
-            return `
+try {
+    await program
+        .addCommand(list)
+        .addCommand(runCommand)
+        .addCommand(installCommand)
+        .addCommand(uninstallCommand)
+        .addCommand(config)
+        .version(PackageJson.version, '-v, --version')
+        .option('--verbose', 'Enables verbose log mode.')
+        .configureHelp({
+            sortOptions: true,
+            sortSubcommands: true,
+            styleUsage() {
+                return `
   Run the console interface
     hf
 
   Run the specified command
     hf <command> [options]`
-        },
-        subcommandTerm(cmd) {
-            return cmd.name()
+            },
+            subcommandTerm(cmd) {
+                return cmd.name()
+            }
+        })
+        .action(async () => {
+            await waitForCleanup()
+            const root = buildRootRoute(program)
+            await runRoute(root)
+        })
+        .parseAsync()
+} catch (error) {
+    console.log(chalk.red.bold('An error ocurred:'))
+
+    if (error instanceof ForgeError) {
+        console.log(error.title)
+
+        if (error.description) {
+            console.log(error.description)
         }
-    })
-    .action(async () => {
-        const root = buildRootRoute(program)
-        await runRoute(root)
-    })
-    .parseAsync()
+
+        if (program.opts()?.verbose) {
+            console.log(error.stack)
+        }
+
+        process.exit(1)
+    }
+
+    if (error instanceof Error) {
+        console.log(error.message)
+
+        if (program.opts()?.verbose) {
+            console.log(error.stack)
+        }
+
+        process.exit(1)
+    }
+
+    console.log(error)
+    process.exit(1)
+}

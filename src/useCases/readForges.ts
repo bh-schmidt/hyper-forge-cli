@@ -1,10 +1,10 @@
-import { HyperForgeData } from "hyper-forge"
+import { Internals } from "hyper-forge/internals"
 
-let readForgesPromise: Promise<HyperForgeData.ForgeInfo[]> | undefined = undefined
-let forges: HyperForgeData.ForgeInfo[] | undefined
+let readForgesPromise: Promise<Internals.ForgeInfo[]> | undefined = undefined
+let forges: Internals.ForgeInfo[] | undefined
 
 export async function readForges() {
-    const promise = HyperForgeData.readForges()
+    const promise = Internals.HyperForgeData.readForges()
     readForgesPromise = promise
 
     forges = await promise

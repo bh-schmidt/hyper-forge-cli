@@ -1,12 +1,9 @@
-import { execa } from "execa";
-import { HyperForgeData, PromptsHelper } from "hyper-forge";
-import fs from 'fs-extra';
-import { cloneRepository } from "./internal/cloneRepository";
 import chalk from "chalk";
-import { getAvailableForges } from "./internal/getAvailableForges";
-import { getForgesToReplace } from "./internal/getForgesToReplace";
+import { execa } from "execa";
+import fs from 'fs-extra';
+import { ForgeError, Utils } from "hyper-forge";
+import { Internals } from "hyper-forge/internals";
 import lodash from "lodash";
-import { deleteOldRepositories } from "../delete-old-repositories/deleteOldRepositories";
 
 interface InstallOptions {
     repository: string
@@ -15,7 +12,7 @@ interface InstallOptions {
 }
 
 export async function installFromGitPrompt() {
-    const answers = await PromptsHelper.promptWithConfirmation([
+    const answers = await Utils.Prompts.prompt([
         {
             name: 'repository',
             type: 'text',
@@ -68,11 +65,11 @@ export async function installFromGitPrompt() {
             answers.commit,
     }
 
-    let repository: HyperForgeData.ClonedRepositories | undefined
+    let repository: Internals.ClonedRepositories | undefined
     let repositoryExists = false
     try {
-        const config = await HyperForgeData.readConfig()
-        repository = await cloneRepository(options, config)
+        const config = await Internals.HyperForgeData.readConfig()
+        repository = await Internals.ForgeHandler.cloneRepository(options, config)
         if (!repository) {
             return false
         }
@@ -82,11 +79,7 @@ export async function installFromGitPrompt() {
         const success = await installInternal(repository, config, options)
 
         if (!success) {
-            const path = HyperForgeData.getGitForgesPath(repository.id)
-            if (!repositoryExists && await fs.exists(path)) {
-                await fs.rm(path, { recursive: true })
-            }
-
+            await deleteClonedRepository(repository, repositoryExists)
             return false
         }
 
@@ -94,28 +87,31 @@ export async function installFromGitPrompt() {
             config.repositories.push(repository)
         }
 
-        await deleteOldRepositories(config)
-        await HyperForgeData.saveConfig(config)
+        await Internals.ForgeHandler.deleteOldRepositories(config)
+        await Internals.HyperForgeData.saveConfig(config)
 
         return true
     } catch (error) {
-        console.log(chalk.red('An error ocurred:'))
-        console.log(error)
+        if (error instanceof ForgeError) {
+            console.log(chalk.red(error.title))
 
-        if (repository) {
-            const path = HyperForgeData.getGitForgesPath(repository.id)
-            if (!repositoryExists && await fs.exists(path)) {
-                await fs.rm(path, { recursive: true })
+            if (error.message) {
+                console.log(error.message)
             }
+        } else {
+            console.log(chalk.red('An error ocurred:'))
+            console.log(error)
         }
+
+        await deleteClonedRepository(repository, repositoryExists);
 
         return false
     }
 }
 
-async function installInternal(repository: HyperForgeData.ClonedRepositories, config: HyperForgeData.ConfigObject, options: InstallOptions) {
+async function installInternal(repository: Internals.ClonedRepositories, config: Internals.ConfigObject, options: InstallOptions) {
     const repositoryExists = config.repositories.some(e => e.id == repository.id)
-    const availableForges = await getAvailableForges(repository, config)
+    const availableForges = await Internals.ForgeHandler.getAvailableForges(repository, config)
     if (availableForges.length == 0) {
         if (repositoryExists) {
             console.log(chalk.yellow('All forges of this repository are already installed.'))
@@ -127,7 +123,7 @@ async function installInternal(repository: HyperForgeData.ClonedRepositories, co
         return false
     }
 
-    const { selections } = await PromptsHelper.promptWithConfirmation([{
+    const { selections } = await Utils.Prompts.prompt([{
         name: 'selections',
         type: 'multiselect',
         message: 'Select the forges to install:',
@@ -144,11 +140,11 @@ async function installInternal(repository: HyperForgeData.ClonedRepositories, co
     }
 
     const forgesToInstall = selectedForges.map((e: number) => availableForges[e])
-    const forgesToReplace = await getForgesToReplace(forgesToInstall, repository, config)
+    const forgesToReplace = await Internals.ForgeHandler.getForgesToReplace(forgesToInstall, repository, config)
     if (forgesToReplace.length > 0) {
         const text = forgesToReplace.map(e => e.id).join('\n\t')
 
-        const { replace } = await PromptsHelper.promptWithConfirmation({
+        const { replace } = await Utils.Prompts.prompt({
             name: 'replace',
             type: 'confirm',
             message: `The following forges are already installed:\n\t${text}\nReplace them?`
@@ -178,4 +174,13 @@ async function installInternal(repository: HyperForgeData.ClonedRepositories, co
     }
 
     return true
+}
+
+async function deleteClonedRepository(repository: Internals.ClonedRepositories | undefined, repositoryExists: boolean) {
+    if (repository) {
+        const path = Internals.HyperForgeData.getGitForgesPath(repository.id);
+        if (!repositoryExists && await fs.exists(path)) {
+            await fs.rm(path, { recursive: true });
+        }
+    }
 }

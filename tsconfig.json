@@ -1,18 +1,25 @@
 {
-  "tsc-alias": {
-    "resolveFullPaths": true,
-    "verbose": false
-  },
-  "compilerOptions": {
-    "sourceMap": true,
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "node",
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "strict": true,
-    "skipLibCheck": true,
-    "rootDir": "src",
-    "outDir": "dist",
-  }
+    "tsc-alias": {
+        "resolveFullPaths": true,
+        "verbose": false
+    },
+    "compilerOptions": {
+        "sourceMap": true,
+        "target": "ESNext",
+        "module": "nodenext",
+        "moduleResolution": "nodenext",
+        "esModuleInterop": true,
+        "resolveJsonModule": true,
+        "forceConsistentCasingInFileNames": true,
+        "strict": true,
+        "skipLibCheck": true,
+        "rootDir": "src",
+        "outDir": "dist",
+        "baseUrl": "./src",
+        "paths": {
+            "@/*": [
+                "./*"
+            ],
+        }
+    },
 }

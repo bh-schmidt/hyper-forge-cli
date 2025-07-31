@@ -1,6 +1,7 @@
-import { executionsTempDir, HyperForgeData } from 'hyper-forge'
+import chalk from 'chalk'
 import fs from 'fs-extra'
 import { globStream } from 'glob'
+import { Internals } from 'hyper-forge/internals'
 import { basename, join } from 'path'
 import { lock } from 'proper-lockfile'
 
@@ -26,37 +27,54 @@ async function cleanupInternal() {
 async function cleanUpExecutions() {
     const directories = globStream('*/', {
         absolute: true,
-        cwd: executionsTempDir,
+        cwd: Internals.executionsTempDirectory,
         stat: true,
     })
 
+    let hadError = false
+
     for await (const directory of directories) {
-        const lockPath = join(directory, '.lock')
-
-        if (!await fs.exists(lockPath)) {
-            continue
-        }
-
-        let release: (() => Promise<void>) | undefined
-
-        try {
-            release = await lock(lockPath, { retries: 0 })
-            release()
-        } catch (error) {
+        if (await shouldIgnore(directory)) {
             continue
         }
 
         try {
             await fs.rm(directory, { recursive: true })
         } catch (error) {
-            console.log(`An error ocurred removing an old directory (${directory})\n\n${error}`)
+            console.log(chalk.red(`An error ocurred removing an old execution directory (${directory})\n\n${error}`))
+            hadError = true
         }
+    }
+
+    if (hadError) {
+        await new Promise(res => {
+            setTimeout(() => {
+                res(null)
+            }, 10_000);
+        })
+    }
+}
+
+async function shouldIgnore(directory: string) {
+    const lockPath = join(directory, '.lock')
+
+    if (!await fs.exists(lockPath)) {
+        return false
+    }
+
+    try {
+        const release = await lock(lockPath, { retries: 0 })
+        await release()
+
+        return false
+    } catch (error) {
+        return true
     }
 }
 
 async function cleanupRepositories() {
-    const gitPath = HyperForgeData.getGitForgesPath()
-    const config = await HyperForgeData.readConfig()
+    const gitPath = Internals.HyperForgeData.getGitForgesPath()
+    const config = await Internals.HyperForgeData.readConfig()
     const ids = new Set(config.repositories.map(e => e.id))
 
     const paths = globStream('*', {

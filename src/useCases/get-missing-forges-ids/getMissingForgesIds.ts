@@ -1,8 +1,8 @@
-import { HyperForgeData } from "hyper-forge"
 import fs from 'fs-extra'
+import { Internals } from 'hyper-forge/internals'
 
 export async function getMissingForgesIds() {
-    const config = await HyperForgeData.readConfig()
+    const config = await Internals.HyperForgeData.readConfig()
     const forges = Object.values(config.forges)
 
     const ids: string[] = []
